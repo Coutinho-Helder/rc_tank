@@ -112,9 +112,48 @@ pins in parallel. Separately, one common GND ties everything together —
 Pi, both BTS7960 logic grounds, Battery A negative, and Battery B
 negative — even though the two batteries are otherwise independent supplies.
 
----
+### 4.1 Preventing Brownouts / Current-Drop Reboots
 
-## 5. Pin Mapping (Raspberry Pi Zero W, BOARD numbering)
+If the Pi resets, hangs, or fails to boot under load (a classic symptom is
+the under-voltage lightning-bolt icon, or `dmesg`/`vcgencmd` reporting a
+throttled state), the root cause is almost always the logic rail sagging
+below the Pi Zero W's under-voltage threshold (~4.63V) for a moment,
+even with the motor supply on a separate battery. Diagnose and fix in
+this order:
+
+1. **Confirm it's a power issue, not an SD card/software issue:**
+   ```bash
+   vcgencmd get_throttled     # non-zero bit 0 = under-voltage has occurred
+   dmesg | grep -i voltage    # look for "Under-voltage detected" entries
+   ```
+2. **Check Battery B's (logic pack) resting and loaded voltage** with a
+   multimeter. A 2S LiPo should read ~7.4–8.4V resting; if it sags
+   noticeably under just the Pi's load, the pack is undersized, aged, or
+   has a poor C-rating for its internal resistance — replace or upsize it.
+   Don't run it near its low-voltage cutoff; sag is worst near empty.
+3. **Re-check the buck converter's output voltage under load**, not just
+   no-load. Adjust it toward ~5.15–5.25V no-load (Pi tolerates 5V ±5%) so
+   there is headroom before it sags under a transient into the Pi's
+   under-voltage range. Do not exceed the Pi's rated input.
+4. **Add bulk capacitance** at the buck converter's output, right at the
+   Pi's 5V/GND pins (e.g., a low-ESR 470–1000 µF electrolytic plus a 100nF
+   ceramic bypass). This smooths short transient loads such as Wi‑Fi/
+   Bluetooth radio bursts that a small battery/converter alone can't
+   supply fast enough.
+5. **Inspect every connector and wire gauge on the logic path** (Battery B
+   → buck converter → Pi). Loose Dupont/jumper connectors and thin wire
+   are a very common cause of intermittent sag, especially with the
+   vibration from moving tracks — solder or crimp proper connectors and
+   use adequately thick wire for this path.
+6. **Verify the common-GND tie between the two battery domains is solid**
+   (short, adequately thick, single star point near the Pi/buck converter)
+   rather than a thin wire daisy-chained through a motor driver board.
+   A weak shared ground lets motor switching current couple noise onto
+   the logic ground reference even with separate batteries.
+7. **If the reset happens right at power-on**, before any motor movement,
+   suspect the logic path in isolation (inrush current at boot from
+   Battery B/buck converter/Pi) rather than the motor domain — this helps
+   narrow the fault to steps 2–5 above.
 
 All GPIO references in the code use **physical pin numbers** (`GPIO.BOARD`),
 not BCM numbers.
@@ -381,6 +420,7 @@ Recommended bench checklist before first drive:
 | Motors twitch at stick center | Deadzone too small for your controller's drift | Increase `DriveConfig.controller_deadzone` |
 | Jerky/no acceleration ramp | `slew_rate_per_sec` too low/high for your gearbox | Tune in `DriveConfig` |
 | `RuntimeError: Failed to initialize motor on pins ...` | Pin already in use, wiring fault, or GPIO not accessible (not running on a Pi / needs permissions) | Check wiring, run with appropriate GPIO permissions |
+| Pi resets/hangs/fails to boot, especially under load | Logic-rail brownout: weak/undersized Battery B, buck converter sagging under transient load, thin wiring, or loose connectors | See §4.1 Preventing Brownouts / Current-Drop Reboots; confirm with `vcgencmd get_throttled` |
 
 ---
 
