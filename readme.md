@@ -18,9 +18,9 @@ troubleshooting reference for the project.
 
 ```mermaid
 graph TD
-    Battery[Battery] -->|raw DC| Buck[LM2596 Buck Converter]
-    Battery -->|raw DC, motor supply| BTSL[BTS7960 - Left]
-    Battery -->|raw DC, motor supply| BTSR[BTS7960 - Right]
+    BattMotor[Battery A - 2S LiPo, motor supply] -->|raw DC, motor supply| BTSL[BTS7960 - Left]
+    BattMotor -->|raw DC, motor supply| BTSR[BTS7960 - Right]
+    BattLogic[Battery B - 2S LiPo, logic supply] -->|raw DC| Buck[LM2596 Buck Converter]
     Buck -->|~5.1-5.2V logic rail| Pi[Raspberry Pi Zero W]
     Buck -->|~5.1-5.2V logic rail, VCC| BTSL
     Buck -->|~5.1-5.2V logic rail, VCC| BTSR
@@ -29,13 +29,23 @@ graph TD
     BTSL -->|motor drive| MotorL[Left DC Gearmotor]
     BTSR -->|motor drive| MotorR[Right DC Gearmotor]
     PS4[PS4 DualShock 4 Controller] -.Bluetooth.-> Pi
+    BattMotor -.common GND.- BattLogic
 ```
 
-The buck converter's output is a shared 5V logic rail: it feeds the Pi
-directly *and* feeds each BTS7960's logic `VCC` directly (a parallel tap,
-not routed through the Pi). Only the GPIO signal lines (`RPWM`/`LPWM`/`R_EN`/
-`L_EN`) run from the Pi to the BTS7960 modules — no power passes through
-the Pi's pins to reach them.
+Two separate 2S LiPo packs are used, each dedicated to one domain:
+**Battery A** feeds the BTS7960 motor-supply inputs directly, and
+**Battery B** feeds the LM2596 buck converter, whose output is a shared 5V
+logic rail that powers the Pi *and* each BTS7960's logic `VCC` directly (a
+parallel tap, not routed through the Pi). Only the GPIO signal lines
+(`RPWM`/`LPWM`/`R_EN`/`L_EN`) run from the Pi to the BTS7960 modules — no
+power passes through the Pi's pins to reach them.
+
+> **Common ground requirement:** even though the two batteries are
+> electrically separate packs, their negative terminals must be tied
+> together (along with the Pi and both BTS7960 grounds). The Pi's GPIO
+> signal lines need a shared ground reference with the BTS7960 modules to
+> read a valid logic level — without a common GND, PWM control will be
+> erratic or non-functional even though each domain has its own supply.
 
 Software runs entirely on the Pi: `ps4_controller_test.py` provides the
 controller abstraction, `tank_ps4_control.py` reads it and drives the
@@ -48,13 +58,13 @@ motors through `RPi.GPIO`.
 | Qty | Component | Notes / Specs to verify |
 |----:|-----------|--------------------------|
 | 1 | Raspberry Pi Zero W | Single-core, 512MB RAM, built-in Wi‑Fi/Bluetooth (shared antenna — see §9 Troubleshooting) |
-| 1 | LM2596 (or equivalent) buck converter | Input: battery voltage; output trimmed to ~5.1–5.2V no‑load to feed the Pi's 5V rail |
-| 1 | Battery pack | Voltage/capacity per your build — must supply both motor stall current *and* the buck converter's Pi load simultaneously |
+| 1 | LM2596 (or equivalent) buck converter | Input: Battery B (logic pack); output trimmed to ~5.1–5.2V no‑load to feed the Pi's 5V rail and both BTS7960 logic `VCC` pins |
+| 2 | 2S LiPo battery pack (Battery A: motor supply, Battery B: buck converter/logic) | Nominal 7.4V / ~8.4V full charge per 2S pack — verify against the BTS7960 motor-supply voltage range and the LM2596 input range before use. Batteries are electrically separate but must share a common GND (see §2) |
 | 2 | BTS7960 H-bridge module (one per side) | ⚠ Verify your specific module's datasheet: motor supply voltage range and peak current rating vary by vendor/clone. Commonly sold as capable of large peak currents, but continuous rating is usually much lower without a heatsink/fan |
 | 2 | DC gearmotor (one per track) | ⚠ Record nominal voltage, no‑load current, and stall current from the motor's datasheet — needed to size wiring gauge and fusing |
 | 1 | Tank chassis / tracks | — |
 | 1 | PS4 DualShock 4 controller ("Wireless Controller") | Paired to the Pi over Bluetooth |
-| — | Wiring, connectors, fuse | See §4 Power Architecture |
+| — | Wiring, connectors, fuses | See §4 Power Architecture |
 
 > **Engineering note:** the values above marked ⚠ are intentionally left as
 > placeholders. Fill them in from your actual component datasheets before
@@ -66,31 +76,41 @@ motors through `RPi.GPIO`.
 
 ## 4. Power Architecture
 
-Two independent power domains:
+Two independent battery packs, each dedicated to one power domain:
 
-1. **Logic/control domain** — Battery → buck converter → shared 5V/GND
-   rail. This rail feeds the Pi *and* both BTS7960 modules' logic `VCC`
-   directly and in parallel — the BTS7960 logic supply does **not** come
-   from the Pi's 5V pin, it taps the buck converter's output alongside it.
-   Only GPIO signal lines (`RPWM`/`LPWM`/`R_EN`/`L_EN`) run from the Pi to
-   the BTS7960 modules.
-2. **Motor domain** — Battery → BTS7960 motor-supply input → motor. This
-   path carries the full drive current and should be wired with
-   appropriately sized conductors, kept short, and fused close to the
-   battery.
+1. **Logic/control domain** — Battery B (2S LiPo) → buck converter →
+   shared 5V/GND rail. This rail feeds the Pi *and* both BTS7960 modules'
+   logic `VCC` directly and in parallel — the BTS7960 logic supply does
+   **not** come from the Pi's 5V pin, it taps the buck converter's output
+   alongside it. Only GPIO signal lines (`RPWM`/`LPWM`/`R_EN`/`L_EN`) run
+   from the Pi to the BTS7960 modules.
+2. **Motor domain** — Battery A (2S LiPo) → BTS7960 motor-supply input →
+   motor. This path carries the full drive current and should be wired
+   with appropriately sized conductors, kept short, and fused close to
+   the battery.
+
+Using two separate packs isolates motor switching noise and voltage sag
+from the logic supply, which helps prevent Pi brownouts and Bluetooth/Wi‑Fi
+glitches during hard acceleration. This isolation only holds if the two
+packs' negative terminals are still tied to a common ground (see §2) —
+otherwise the Pi's GPIO signals have no valid reference relative to the
+BTS7960 inputs.
 
 **Recommended safety additions (not yet implemented in wiring described
 here):**
-- An inline fuse (or resettable PTC) on the main battery line, sized to
-  the sum of both motors' expected stall current plus margin.
-- A physical power switch / battery disconnect accessible without tools.
+- An inline fuse (or resettable PTC) on each battery's positive line,
+  sized to that domain's expected peak current (motor stall current for
+  Battery A; buck converter input current for Battery B) plus margin.
+- A physical power switch / battery disconnect accessible without tools,
+  ideally one per pack.
 - Decoupling capacitance close to each BTS7960's motor-supply input if
   motor electrical noise causes Pi brownouts or Bluetooth glitches.
 
-In practice, the 5V and GND rails are shared: one 5V line from the buck
-converter feeds the Pi and both BTS7960 logic `VCC` pins in parallel, and
-one common GND ties everything together (Pi, both BTS7960 logic grounds,
-and the battery negative).
+In practice, the 5V and GND rails on the logic side are shared: one 5V
+line from the buck converter feeds the Pi and both BTS7960 logic `VCC`
+pins in parallel. Separately, one common GND ties everything together —
+Pi, both BTS7960 logic grounds, Battery A negative, and Battery B
+negative — even though the two batteries are otherwise independent supplies.
 
 ---
 
@@ -105,23 +125,32 @@ not BCM numbers.
 
 - `OUT+` → Pin 2 (5V)
 - `OUT-` → Pin 6 (GND)
+- Input: Battery B (2S LiPo, logic pack)
 
 #### BTS7960 Left — Power
 
+- Motor supply input (`B+`/`B-`) → Battery A (2S LiPo, motor pack), wired
+  directly — not through the Pi or buck converter
 - `VCC` → LM2596 `OUT+` (same 5V rail as Pi Pin 2, wired directly from the
   buck converter — **not** sourced from the Pi)
-- `GND` → LM2596 `OUT-` / common ground (same rail as Pi Pin 6)
+- `GND` → LM2596 `OUT-` / common ground (same rail as Pi Pin 6, and tied to
+  Battery A negative)
 
 #### BTS7960 Right — Power
 
+- Motor supply input (`B+`/`B-`) → Battery A (2S LiPo, motor pack), wired
+  directly — not through the Pi or buck converter
 - `VCC` → LM2596 `OUT+` (same 5V rail as Pi Pin 2, wired directly from the
   buck converter — **not** sourced from the Pi)
-- `GND` → LM2596 `OUT-` / common ground (same rail as Pi Pin 6)
+- `GND` → LM2596 `OUT-` / common ground (same rail as Pi Pin 6, and tied to
+  Battery A negative)
 
 > The BTS7960's **motor supply** input (separate from its logic `VCC`) connects
-> directly to the battery, not to the buck converter or the Pi — see §4.
-> The logic `VCC` is powered by the buck converter's output rail directly,
-> in parallel with the Pi, not routed through any Pi pin.
+> directly to Battery A (the motor pack), not to Battery B, the buck
+> converter, or the Pi — see §4. The logic `VCC` is powered by the buck
+> converter's output rail directly, in parallel with the Pi, not routed
+> through any Pi pin. Battery A and Battery B remain independent supplies
+> but must share a common GND for the logic signals to be valid.
 
 ### 5.2 BTS7960 Left — Logic Pins
 
