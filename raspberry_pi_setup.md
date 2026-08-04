@@ -4,6 +4,21 @@ This document covers OS installation, first-boot updates, and all system/
 Python dependencies required to run this project on a Raspberry Pi Zero W.
 For wiring, pin mapping, and software architecture, see [readme.md](readme.md).
 
+## Contents
+
+1. [Requirements](#1-requirements)
+2. [Flash Raspberry Pi OS](#2-flash-raspberry-pi-os)
+3. [First Boot and System Update](#3-first-boot-and-system-update)
+4. [Enable and Configure Bluetooth](#4-enable-and-configure-bluetooth-ps4-controller)
+5. [Install System Packages](#5-install-system-packages)
+6. [Get the Project Code](#6-get-the-project-code)
+7. [Python Environment](#7-python-environment)
+8. [GPIO and Joystick Permissions](#8-gpio-and-joystick-permissions)
+9. [Verify the Setup](#9-verify-the-setup)
+10. [Optional: Auto-Start on Controller Connect](#10-optional-auto-start-when-the-ps4-controller-connects-udev--systemd)
+11. [Optional: Power Saving](#11-optional-power-saving--disable-unused-peripherals)
+12. [Troubleshooting](#12-troubleshooting)
+
 ---
 
 ## 1. Requirements
@@ -201,15 +216,28 @@ validation checklist before driving on tracks.
 
 ---
 
-## 10. Optional: Run Automatically on Boot (systemd)
+## 10. Optional: Auto-Start When the PS4 Controller Connects (udev + systemd)
 
-Create a service unit:
+`tank_ps4_control.py`'s own `PS4Controller.connect()` fails immediately
+(`RuntimeError`) if no joystick is present — it does not block waiting for
+one. So rather than running the script from boot (which would need a
+restart-crash-loop until the controller pairs), the more robust approach is
+a udev rule that starts a systemd service the moment the DS4's joystick
+device node appears, and stops it automatically when the controller
+disconnects.
+
+### 10.1 Create the systemd service
+
+Note this unit is **not** enabled at boot — it is only ever started by the
+udev rule in §10.3, and `BindsTo=` makes systemd stop it automatically when
+the bound device goes away (i.e. the controller disconnects).
 
 ```bash
 sudo tee /etc/systemd/system/rc-tank.service > /dev/null <<'EOF'
 [Unit]
 Description=RC Tank PS4 Drive Control
-After=bluetooth.target network.target
+BindsTo=dev-input-js0.device
+After=dev-input-js0.device bluetooth.target
 
 [Service]
 Type=simple
@@ -218,19 +246,73 @@ WorkingDirectory=/home/<username>/rc_tank
 ExecStart=/home/<username>/rc_tank/.venv/bin/python3 tank_ps4_control.py
 Restart=on-failure
 RestartSec=2
-
-[Install]
-WantedBy=multi-user.target
 EOF
+
+sudo systemctl daemon-reload
 ```
 
-Enable and start it:
+Don't `enable` or `start` it manually — the udev rule below handles that.
+
+### 10.2 Confirm the joystick device name
+
+With the controller connected once (e.g. via the manual `bluetoothctl`
+steps in §4), confirm the device node and reported name udev sees:
 
 ```bash
-sudo systemctl daemon-reload
-sudo systemctl enable --now rc-tank.service
-sudo journalctl -u rc-tank.service -f   # view live logs
+ls /dev/input/js*                                   # expect: /dev/input/js0
+udevadm info -a -n /dev/input/js0 | grep -m1 'ATTRS{name}'
+# expect: ATTRS{name}=="Wireless Controller"
 ```
+
+If your controller reports a different name, use that value in the rule
+below instead.
+
+### 10.3 Add the udev rule
+
+```bash
+sudo tee /etc/udev/rules.d/99-ps4-tank.rules > /dev/null <<'EOF'
+ACTION=="add", SUBSYSTEM=="input", KERNEL=="js[0-9]*", ATTRS{name}=="Wireless Controller", TAG+="systemd", ENV{SYSTEMD_WANTS}+="rc-tank.service"
+EOF
+
+sudo udevadm control --reload-rules
+sudo udevadm trigger
+```
+
+`TAG+="systemd"` makes udev create a matching `.device` unit
+(`dev-input-js0.device`) that the service's `BindsTo=`/`After=` reference;
+`ENV{SYSTEMD_WANTS}` tells systemd to start `rc-tank.service` whenever that
+device unit appears. When the controller disconnects and `/dev/input/js0`
+is removed, `BindsTo=` causes systemd to stop `rc-tank.service`
+automatically — no separate "on remove" rule is needed.
+
+### 10.4 Test it
+
+```bash
+sudo journalctl -u rc-tank.service -f   # leave running in one shell
+```
+
+In another shell (or just physically), connect/disconnect the PS4
+controller over Bluetooth and confirm the service starts and stops with it:
+
+```bash
+systemctl status rc-tank.service
+```
+
+### 10.5 Alternative: always run at boot
+
+If you'd rather the service simply run continuously from boot (accepting
+that it will sit in a restart-crash-loop, retrying every `RestartSec`,
+until the controller is actually connected), drop the `BindsTo=`/`After=`
+device dependency, add `WantedBy=multi-user.target` under `[Install]`, and
+enable it normally:
+
+```bash
+sudo systemctl enable --now rc-tank.service
+```
+
+This is simpler but noisier in the logs and wastes restart cycles while
+the controller is offline; the udev-triggered approach in §10.1–10.3 is
+recommended instead.
 
 ---
 
@@ -254,3 +336,5 @@ the PS4 controller link.
 | `Permission denied` accessing GPIO/joystick | User not in `gpio`/`input` group | `sudo usermod -aG gpio,input <username>`, then re-login |
 | Wi‑Fi/SSH unreachable after flashing | Wi‑Fi country code not set, or wrong credentials in Imager | Re-flash with Imager's advanced settings, double-check SSID/password/country |
 | Service fails to start under systemd but works interactively | Wrong `WorkingDirectory`/`ExecStart` path, or venv not referenced | Confirm paths in the unit file match your actual install location |
+| `rc-tank.service` doesn't start when controller connects | udev rule not matching (`ATTRS{name}` mismatch), or rules/unit not reloaded | Re-check §10.2's `ATTRS{name}` value, re-run `udevadm control --reload-rules`, inspect with `udevadm monitor --udev` while connecting |
+| `rc-tank.service` doesn't stop when controller disconnects | `BindsTo=`/`After=` device unit name doesn't match the actual `/dev/input/jsN` node | Confirm with `systemd-escape --path --suffix=device /dev/input/js0` and update `BindsTo=`/`After=` in the unit accordingly |
