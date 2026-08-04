@@ -1,5 +1,21 @@
 # RC Tank — Engineering Documentation
 
+## Contents
+
+1. [Overview](#1-overview)
+2. [System Architecture](#2-system-architecture)
+3. [Bill of Materials](#3-bill-of-materials)
+4. [Power Architecture](#4-power-architecture)
+5. [Wiring and Pin Mapping](#5-wiring-and-pin-mapping)
+6. [Software Architecture](#6-software-architecture)
+7. [Running the Project](#7-running-the-project)
+8. [Testing and Validation Procedure](#8-testing-and-validation-procedure)
+9. [Troubleshooting](#9-troubleshooting)
+10. [Optional: Peripherals to Disable](#10-optional-peripherals-to-disable-power-saving)
+11. [Known Limitations / Future Work](#11-known-limitations--future-work)
+
+---
+
 ## 1. Overview
 
 Tracked tank platform built on a Raspberry Pi Zero W, tele-operated over
@@ -154,6 +170,10 @@ this order:
    suspect the logic path in isolation (inrush current at boot from
    Battery B/buck converter/Pi) rather than the motor domain — this helps
    narrow the fault to steps 2–5 above.
+
+---
+
+## 5. Wiring and Pin Mapping
 
 All GPIO references in the code use **physical pin numbers** (`GPIO.BOARD`),
 not BCM numbers.
