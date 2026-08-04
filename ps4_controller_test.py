@@ -7,10 +7,12 @@ indices are driver-dependent and may differ on Windows/macOS or with a
 different SDL/pygame version -- verify with the live telemetry view
 (``python ps4_controller_test.py``) before relying on them for control.
 """
+from __future__ import annotations
+
 import logging
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Callable, Dict, Optional
 
 import pygame
 
@@ -63,9 +65,9 @@ class PS4Controller:
         self.dpad_hat = dpad_hat
         self.axes = AxisMap()
         self.buttons = ButtonMap()
-        self.joystick: Optional[pygame.joystick.Joystick] = None
-        self.button_handlers: Dict[int, Callable[[bool], None]] = {}
-        self.axis_handlers: Dict[int, Callable[[float], None]] = {}
+        self.joystick: pygame.joystick.Joystick | None = None
+        self.button_handlers: dict[int, Callable[[bool], None]] = {}
+        self.axis_handlers: dict[int, Callable[[float], None]] = {}
 
     def connect(self) -> None:
         """Initialize pygame's joystick subsystem and open the controller.
@@ -193,8 +195,7 @@ class PS4Controller:
             elif event.type == pygame.JOYAXISMOTION:
                 handler = self.axis_handlers.get(event.axis)
                 if handler:
-                    value = 0.0 if abs(event.value) < self.deadzone else event.value
-                    handler(value)
+                    handler(self.axis_value(event.axis))
 
     def print_live_state(self, interval: float = 0.1) -> None:
         """Print a continuously updating single-line telemetry view.
