@@ -260,7 +260,8 @@ class TankDrive:
         try:
             while self.running:
                 loop_start = time.monotonic()
-                dt = loop_start - last_time
+                # Clamp dt so a long reconnect pause never bypasses slew limiting.
+                dt = min(loop_start - last_time, loop_period)
                 last_time = loop_start
 
                 try:
@@ -304,7 +305,7 @@ class TankDrive:
 def main() -> int:
     tank = TankDrive()
 
-    def _handle_signal(signum, frame):
+    def _handle_signal(*_):
         raise KeyboardInterrupt
 
     signal.signal(signal.SIGINT, _handle_signal)
